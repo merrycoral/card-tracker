@@ -4,10 +4,13 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../models/card_model.dart';
 import '../models/performance_model.dart';
+import '../providers/open_banking_provider.dart';
 import '../providers/performance_provider.dart';
 import '../services/notification_service.dart';
+import '../services/open_banking_service.dart';
 import '../widgets/performance_chart.dart';
 import 'add_card_screen.dart';
+import 'bank_connect_screen.dart';
 
 class CardDetailScreen extends ConsumerStatefulWidget {
   final CardModel card;
@@ -114,6 +117,24 @@ class _CardDetailScreenState extends ConsumerState<CardDetailScreen> {
       appBar: AppBar(
         title: Text(card.name),
         actions: [
+          // 오픈뱅킹 연동 버튼
+          Consumer(builder: (_, ref, __) {
+            final mapping = ref.watch(obCardMappingProvider);
+            final isLinked = mapping.containsKey(card.id);
+            return IconButton(
+              icon: Icon(
+                isLinked ? Icons.link : Icons.link_off,
+                color: isLinked ? Colors.green : null,
+              ),
+              tooltip: isLinked ? '오픈뱅킹 연동됨' : '오픈뱅킹 연동',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => BankConnectScreen(appCard: card),
+                ),
+              ),
+            );
+          }),
           IconButton(
             icon: const Icon(Icons.edit),
             onPressed: () async {
@@ -134,8 +155,15 @@ class _CardDetailScreenState extends ConsumerState<CardDetailScreen> {
           const SizedBox(height: 20),
           _buildMonthSelector(),
           const SizedBox(height: 16),
+          // 오픈뱅킹 연동 시 자동 불러오기 버튼
+          _OBSyncButton(card: card, selectedMonth: _selectedMonth, onSynced: (amount) {
+            _amountCtrl.text = amount.toStringAsFixed(0);
+          }),
+          const SizedBox(height: 12),
           _buildPerformanceInput(rate, isAchieved, color),
           const SizedBox(height: 24),
+          // 실거래 내역 (오픈뱅킹 연동 시)
+          _OBTransactionList(card: card, selectedMonth: _selectedMonth),
           if (performances.length > 1) ...[
             const Text(
               '월별 달성률 추이',
@@ -317,5 +345,210 @@ class _CardDetailScreenState extends ConsumerState<CardDetailScreen> {
       return '${(amount / 10000).toStringAsFixed(0)}만원';
     }
     return '${amount.toStringAsFixed(0)}원';
+  }
+}
+
+// ── 오픈뱅킹 자동 동기화 버튼 ─────────────────────────────────────────────────
+
+class _OBSyncButton extends ConsumerWidget {
+  final CardModel card;
+  final DateTime selectedMonth;
+  final ValueChanged<double> onSynced;
+
+  const _OBSyncButton({
+    required this.card,
+    required this.selectedMonth,
+    required this.onSynced,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mapping = ref.watch(obCardMappingProvider);
+    final cardNo = mapping[card.id];
+    if (cardNo == null) return const SizedBox.shrink();
+
+    final usageAsync = ref.watch(obMonthlyUsageProvider(
+      usageParams(cardNo, selectedMonth.year, selectedMonth.month),
+    ));
+
+    return usageAsync.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (e, _) => const SizedBox.shrink(),
+      data: (amount) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.blue[50],
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.blue.shade200),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.sync, size: 18, color: Colors.blue),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('오픈뱅킹 실시간 내역',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue)),
+                  Text(
+                    '승인 금액: ${_fmt(amount)}',
+                    style: TextStyle(fontSize: 13, color: Colors.blue[800]),
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => onSynced(amount),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                textStyle: const TextStyle(fontSize: 12),
+              ),
+              child: const Text('적용'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _fmt(double v) =>
+      v >= 10000 ? '${(v / 10000).toStringAsFixed(0)}만원' : '${v.toStringAsFixed(0)}원';
+}
+
+// ── 실거래 내역 리스트 ────────────────────────────────────────────────────────
+
+class _OBTransactionList extends ConsumerWidget {
+  final CardModel card;
+  final DateTime selectedMonth;
+
+  const _OBTransactionList({required this.card, required this.selectedMonth});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final mapping = ref.watch(obCardMappingProvider);
+    final cardNo = mapping[card.id];
+    if (cardNo == null) return const SizedBox.shrink();
+
+    final txnsAsync = ref.watch(obTransactionsProvider(
+      txnParams(cardNo, selectedMonth.year, selectedMonth.month),
+    ));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('실거래 내역',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            txnsAsync.maybeWhen(
+              data: (txns) => Text('${txns.length}건',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+              orElse: () => const SizedBox.shrink(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        txnsAsync.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          ),
+          error: (e, _) => Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text('내역 조회 실패: $e',
+                style: const TextStyle(color: Colors.red, fontSize: 13)),
+          ),
+          data: (txns) {
+            if (txns.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Center(
+                  child: Text('이번 달 사용 내역이 없습니다.',
+                      style: TextStyle(color: Colors.grey[500])),
+                ),
+              );
+            }
+            return Column(
+              children: txns.map((t) => _TransactionTile(txn: t)).toList(),
+            );
+          },
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+}
+
+class _TransactionTile extends StatelessWidget {
+  final OBTransaction txn;
+  const _TransactionTile({required this.txn});
+
+  @override
+  Widget build(BuildContext context) {
+    final fmt = NumberFormat('#,###');
+    final dateFmt = DateFormat('M/d HH:mm');
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: txn.isCancelled ? Colors.grey[50] : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  txn.merchantName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    decoration: txn.isCancelled
+                        ? TextDecoration.lineThrough
+                        : null,
+                    color: txn.isCancelled ? Colors.grey : null,
+                  ),
+                ),
+                Text(
+                  dateFmt.format(txn.approvedAt),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${fmt.format(txn.approvedAmount)}원',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: txn.isCancelled ? Colors.grey : Colors.black,
+                  decoration: txn.isCancelled
+                      ? TextDecoration.lineThrough
+                      : null,
+                ),
+              ),
+              if (txn.isCancelled)
+                const Text('취소',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Colors.red,
+                        fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
