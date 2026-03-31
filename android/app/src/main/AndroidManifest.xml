@@ -32,6 +32,14 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <!-- 오픈뱅킹 OAuth 콜백 딥링크 -->
+            <intent-filter android:label="card_tracker_oauth">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="cardtracker" android:host="oauth"/>
+            </intent-filter>
         </activity>
 
         <!-- flutter_local_notifications scheduled alarm receiver -->
